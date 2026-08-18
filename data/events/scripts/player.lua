@@ -384,51 +384,50 @@ function Player:onMoveCreature(creature, fromPosition, toPosition)
 	return true
 end
 
-local function hasPendingReport(playerGuid, targetName, reportType)
-	local player = Player(playerGuid)
-	if not player then
-		return false
-	end
-	local name = player:getName():gsub("%s+", "_")
-	FS.mkdir_p(string.format("%s/reports/players/%s", CORE_DIRECTORY, name))
-	local file = io.open(string.format("%s/reports/players/%s-%s-%d.txt", CORE_DIRECTORY, name, targetName, reportType), "r")
-	if file then
-		io.close(file)
-		return true
-	end
-	return false
-end
+local REPORT_COOLDOWN_STORAGE = 982310
+local REPORT_COOLDOWN_TIME = 15 -- seconds
 
 function Player:onReportRuleViolation(targetName, reportType, reportReason, comment, translation)
-	local name = self:getName()
-	if hasPendingReport(self:getGuid(), targetName, reportType) then
-		self:sendTextMessage(MESSAGE_EVENT_ADVANCE, "Your report is being processed.")
+	local currentTime = os.time()
+	local lastReport = self:getStorageValue(REPORT_COOLDOWN_STORAGE)
+	if lastReport and lastReport > currentTime then
+		self:sendCancelMessage(string.format("Please wait %d seconds before sending another report.", lastReport - currentTime))
 		return
 	end
+	self:setStorageValue(REPORT_COOLDOWN_STORAGE, currentTime + REPORT_COOLDOWN_TIME)
 
-	local file = io.open(string.format("%s/reports/players/%s-%s-%d.txt", CORE_DIRECTORY, name, targetName, reportType), "a")
-	if not file then
-		self:sendTextMessage(MESSAGE_EVENT_ADVANCE, "There was an error when processing your report, please contact a gamemaster.")
-		return
+	local accountId = self:getAccountId()
+	local playerId = self:getGuid()
+	local playerName = self:getName()
+	local position = self:getPosition()
+
+	local reasonStr = string.format("Type: %d, Reason: %d", reportType, reportReason)
+	local fullMessage = comment
+	if translation and #translation > 0 and reportType ~= REPORT_TYPE_BOT then
+		fullMessage = fullMessage .. " | Statement: " .. translation
 	end
 
-	io.output(file)
-	io.write("------------------------------\n")
-	io.write("Reported by: " .. name .. "\n")
-	io.write("Target: " .. targetName .. "\n")
-	io.write("Type: " .. reportType .. "\n")
-	io.write("Reason: " .. reportReason .. "\n")
-	io.write("Comment: " .. comment .. "\n")
-	if reportType ~= REPORT_TYPE_BOT then
-		io.write("Translation: " .. translation .. "\n")
-	end
-	io.write("------------------------------\n")
-	io.close(file)
+	local query = string.format(
+		"INSERT INTO `server_tickets` (`account_id`, `player_id`, `player_name`, `origin`, `category`, `subject`, `message`, `target_name`, `pos_x`, `pos_y`, `pos_z`, `status`, `priority`, `created_at`, `updated_at`) VALUES (%d, %d, %s, 'ingame_rule_violation', 'rule_violation', %s, %s, %s, %d, %d, %d, 'open', 'high', %d, %d)",
+		accountId,
+		playerId,
+		db.escapeString(playerName),
+		db.escapeString("Rule Violation: " .. targetName .. " (" .. reasonStr .. ")"),
+		db.escapeString(fullMessage),
+		db.escapeString(targetName),
+		position.x,
+		position.y,
+		position.z,
+		currentTime,
+		currentTime
+	)
+
+	db.asyncQuery(query)
+
 	self:sendTextMessage(
 		MESSAGE_EVENT_ADVANCE,
 		string.format(
-			"Thank you for reporting %s. Your report \z
-	will be processed by %s team as soon as possible.",
+			"Thank you for reporting %s. Your report will be processed by %s team as soon as possible.",
 			targetName,
 			configManager.getString(configKeys.SERVER_NAME)
 		)
@@ -437,25 +436,35 @@ function Player:onReportRuleViolation(targetName, reportType, reportReason, comm
 end
 
 function Player:onReportBug(message, position, category)
-	local name = self:getName():gsub("%s+", "_")
-	FS.mkdir_p(string.format("%s/reports/bugs/%s", CORE_DIRECTORY, name))
-	local file = io.open(string.format("%s/reports/bugs/%s/report.txt", CORE_DIRECTORY, name), "a")
-
-	if not file then
-		self:sendTextMessage(MESSAGE_EVENT_ADVANCE, "There was an error when processing your report, please contact a gamemaster.")
+	local currentTime = os.time()
+	local lastReport = self:getStorageValue(REPORT_COOLDOWN_STORAGE)
+	if lastReport and lastReport > currentTime then
+		self:sendCancelMessage(string.format("Please wait %d seconds before sending another bug report.", lastReport - currentTime))
 		return true
 	end
+	self:setStorageValue(REPORT_COOLDOWN_STORAGE, currentTime + REPORT_COOLDOWN_TIME)
 
-	io.output(file)
-	io.write("------------------------------\n")
-	io.write("Name: " .. name)
-	if category == BUG_CATEGORY_MAP then
-		io.write(" [Map position: " .. position.x .. ", " .. position.y .. ", " .. position.z .. "]")
-	end
+	local accountId = self:getAccountId()
+	local playerId = self:getGuid()
+	local playerName = self:getName()
 	local playerPosition = self:getPosition()
-	io.write(" [Player Position: " .. playerPosition.x .. ", " .. playerPosition.y .. ", " .. playerPosition.z .. "]\n")
-	io.write("Comment: " .. message .. "\n")
-	io.close(file)
+
+	local categoryName = (category == BUG_CATEGORY_MAP and "Map Bug" or (category == BUG_CATEGORY_TYPO and "Typo" or "Game Mechanic / Bug"))
+	local query = string.format(
+		"INSERT INTO `server_tickets` (`account_id`, `player_id`, `player_name`, `origin`, `category`, `subject`, `message`, `pos_x`, `pos_y`, `pos_z`, `status`, `priority`, `created_at`, `updated_at`) VALUES (%d, %d, %s, 'ingame_bug', 'bug', %s, %s, %d, %d, %d, 'open', 'medium', %d, %d)",
+		accountId,
+		playerId,
+		db.escapeString(playerName),
+		db.escapeString("Bug Report: " .. categoryName),
+		db.escapeString(message),
+		position.x ~= 0 and position.x or playerPosition.x,
+		position.y ~= 0 and position.y or playerPosition.y,
+		position.z ~= 0 and position.z or playerPosition.z,
+		currentTime,
+		currentTime
+	)
+
+	db.asyncQuery(query)
 
 	self:sendTextMessage(MESSAGE_EVENT_ADVANCE, "Your report has been sent to " .. configManager.getString(configKeys.SERVER_NAME) .. ".")
 	return true
