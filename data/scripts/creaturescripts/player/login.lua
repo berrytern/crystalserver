@@ -217,6 +217,17 @@ function playerLoginGlobal.onLogin(player)
 		player:setElementalStance(elemental)
 	end
 
+	-- Check for unread staff replies on tickets
+	local accountId = player:getAccountId()
+	local ticketResult = db.storeQuery(string.format("SELECT COUNT(*) AS `unread_count` FROM `server_tickets` WHERE `account_id` = %d AND `has_unread_staff_reply` = 1", accountId))
+	if ticketResult then
+		local unreadCount = Result.getNumber(ticketResult, "unread_count")
+		Result.free(ticketResult)
+		if unreadCount > 0 then
+			player:sendTextMessage(MESSAGE_EVENT_ADVANCE, string.format("You have %d ticket response%s from the staff! Type !ticket to view.", unreadCount, unreadCount > 1 and "s" or ""))
+		end
+	end
+
 	return true
 end
 
